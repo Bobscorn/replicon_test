@@ -72,7 +72,11 @@ pub struct InputsCount(u64);
 // The event that clients will send to the server when it receives input
 // This event will spawn the entities on the server
 #[derive(Event, Serialize, Deserialize)]
-pub struct PlayerInput(Entity);
+pub enum PlayerInput
+{
+    None,
+    Shoot(Entity),
+}
 
 // A dud component that will be attached to the pre-spawned entities
 #[derive(Component, Serialize, Deserialize, Default)]
@@ -111,7 +115,7 @@ fn player_input_system(
     let spawned_entity = commands.spawn((PlayerSpawnedComponent::default(), Replication)).id();
     info!("Client: Spawned {spawned_entity:?} From Input");
 
-    input_writer.send(PlayerInput(spawned_entity));
+    input_writer.send(PlayerInput::Shoot(spawned_entity));
 }
 
 // Server-side system that receives the events and spawns its own version of the entity
@@ -127,14 +131,14 @@ fn receive_player_input_system(
         {
             continue;
         }
-        
-        let client_entity = event.0;
+
+        let PlayerInput::Shoot(client_entity) = event else { continue; };
 
         let server_entity = commands.spawn((PlayerSpawnedComponent::default(), Replication)).id();
 
         info!("Server: Spawned {server_entity:?} From Client Event (which spawned {client_entity:?})");
 
-        mapping.insert(*client_id, ClientMapping { tick: *tick, server_entity: server_entity, client_entity: client_entity });
+        mapping.insert(*client_id, ClientMapping { tick: *tick, server_entity: server_entity, client_entity: *client_entity });
     }
 }
 
