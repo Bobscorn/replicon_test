@@ -257,7 +257,7 @@ fn cli_system(
                 },
             ));
 
-            commands.spawn((Player(SERVER_ID), Position(Vec2::ZERO)));
+            commands.spawn((Player(SERVER_ID), Position(Vec2::ZERO), SpriteBundle { sprite: Sprite { custom_size: Some(Vec2::new(15.0, 15.0)), ..default() }, ..default() }));
         }
         Cli::Client { port, ip } => {
             info!("Starting a client connecting to: {ip:?}:{port}");
@@ -312,7 +312,7 @@ fn server_connection_events_system(
             {
                 info!("Client '{client_id}' connected");
 
-                commands.spawn((Player(*client_id), Position(Vec2::ZERO)));
+                commands.spawn((Player(*client_id), Position(Vec2::ZERO), SpriteBundle { sprite: Sprite { custom_size: Some(Vec2::new(15.0, 15.0)), ..default() }, ..default() }));
             }
             ServerEvent::ClientDisconnected { client_id, reason } =>
             {
