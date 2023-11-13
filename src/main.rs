@@ -1,7 +1,7 @@
 use std::{error::Error, net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket}, time::{SystemTime, Duration}};
 
 use bevy::prelude::*;
-use bevy_replicon::{prelude::*, renet::{ConnectionConfig, transport::{ServerConfig, ServerAuthentication, NetcodeServerTransport, ClientAuthentication, NetcodeClientTransport}, SendType}, client};
+use bevy_replicon::{prelude::*, renet::{ConnectionConfig, transport::{ServerConfig, ServerAuthentication, NetcodeServerTransport, ClientAuthentication, NetcodeClientTransport}, SendType, ServerEvent}, client};
 use clap::Parser;
 use serde::{Serialize, Deserialize};
 
@@ -12,6 +12,7 @@ fn main() {
         .init_resource::<InputsCount>()
         .init_resource::<Timmy>()
         .replicate::<Player>()
+        .replicate::<Position>()
         .replicate::<PlayerSpawnedComponent>()
         .add_client_event::<PlayerInput>(SendType::ReliableOrdered { resend_time: Duration::from_millis(300) })
         .add_systems(
@@ -27,7 +28,10 @@ fn main() {
             entity_tracker_system,
         ))
         .add_systems(Update,
-            receive_player_input_system.run_if(resource_exists::<RenetServer>())
+            (
+                receive_player_input_system,
+                server_connection_events_system,
+            ).run_if(resource_exists::<RenetServer>())
         )
         .add_systems(Update, 
             (client_tracker_system, client_random_spawn_system).run_if(resource_exists::<RenetClient>())
@@ -91,6 +95,9 @@ pub struct RandomOtherComponent;
 
 #[derive(Component)]
 pub struct RandomComponent;
+
+#[derive(Component, Serialize, Deserialize)]
+pub struct Position(pub Vec2);
 
 // Marker component for the text object that tracks spawn counts
 #[derive(Component)]
@@ -249,6 +256,8 @@ fn cli_system(
                     ..default()
                 },
             ));
+
+            commands.spawn((Player(SERVER_ID), Position(Vec2::ZERO)));
         }
         Cli::Client { port, ip } => {
             info!("Starting a client connecting to: {ip:?}:{port}");
@@ -291,6 +300,26 @@ fn cli_system(
 }
 
 
+fn server_connection_events_system(
+    mut commands: Commands,
+    mut server_events: EventReader<ServerEvent>,
+) {
+    for event in &mut server_events
+    {
+        match event
+        {
+            ServerEvent::ClientConnected { client_id} => 
+            {
+                info!("Client '{client_id}' connected");
 
+                commands.spawn((Player(*client_id), Position(Vec2::ZERO)));
+            }
+            ServerEvent::ClientDisconnected { client_id, reason } =>
+            {
+                info!("Client '{client_id}' disconnected: {reason}");
+            }
+        }
+    }
+}
 
 
