@@ -9,3 +9,11 @@ bevy_replicon = "0.15.1"
 serde = "1.0"
 clap = { version = "4.1", features = ["derive"] } # For easy CLI reading
 bevy_rapier2d = "0.22.0"
+
+[[bin]]
+name = "replicon_test_1"
+path = "src/main.rs"
+
+[[bin]]
+name = "replicon_test_2"
+path = "src/test_2.rs"

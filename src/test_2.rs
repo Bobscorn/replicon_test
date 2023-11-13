@@ -12,10 +12,9 @@ fn main() {
         .init_resource::<InputsCount>()
         .init_resource::<Timmy>()
         .replicate::<Player>()
-        .replicate::<Position>()
         .replicate::<PlayerSpawnedComponent>()
         .add_client_event::<PlayerInput>(SendType::ReliableOrdered { resend_time: Duration::from_millis(300) })
-        // .add_client_event::<PlayerMovement>(SendType::ReliableOrdered { resend_time: Duration::from_millis(300) })
+        .add_client_event::<OtherPlayerInput>(SendType::ReliableOrdered { resend_time: Duration::from_millis(300) })
         .add_systems(
             Startup,
         (
@@ -25,8 +24,6 @@ fn main() {
         .add_systems(Update, 
             (
             player_input_system,
-            player_movement_system,
-            move_player_system,
             update_input_count_text,
             entity_tracker_system,
             attach_extras_to_players,
@@ -34,16 +31,11 @@ fn main() {
         .add_systems(Update,
             (
                 receive_player_input_system,
-                //receive_player_movement_system,
-            ).run_if(has_authority())
-        )
-        .add_systems(Update,
-            (
                 server_connection_events_system,
             ).run_if(resource_exists::<RenetServer>())
         )
         .add_systems(Update, 
-            (client_tracker_system, client_random_spawn_system).run_if(resource_exists::<RenetClient>())
+            (client_random_spawn_system).run_if(resource_exists::<RenetClient>())
         )
         .run();
 }
@@ -82,9 +74,6 @@ impl Default for Cli
 #[derive(Resource, Default)]
 pub struct InputsCount(u64);
 
-#[derive(Resource)]
-pub struct LocalPlayerId(pub u64);
-
 // The event that clients will send to the server when it receives input
 // This event will spawn the entities on the server
 #[derive(Event, Serialize, Deserialize)]
@@ -92,31 +81,14 @@ pub enum PlayerInput
 {
     None,
     Shoot(Entity),
-    Movement(Vec2),
 }
 
-// #[derive(Event, Serialize, Deserialize)]
-// pub struct PlayerMovement(Vec2);
+#[derive(Event, Serialize, Debug, Deserialize)]
+pub struct OtherPlayerInput(pub bool);
 
 // A dud component that will be attached to the pre-spawned entities
 #[derive(Component, Serialize, Deserialize, Default)]
-pub struct PlayerSpawnedComponent
-{
-    random_stuff: [u64; 20],
-    other_random_stuff: [u64; 13],
-}
-
-#[derive(Component)]
-pub struct RandomOtherComponent;
-
-#[derive(Component)]
-pub struct RandomComponent;
-
-#[derive(Component, Serialize, Deserialize)]
-pub struct Position(pub Vec2);
-
-#[derive(Component, Default)]
-pub struct MoveDirection(pub Vec2);
+pub struct PlayerSpawnedComponent;
 
 // Marker component for the text object that tracks spawn counts
 #[derive(Component)]
@@ -128,78 +100,32 @@ pub struct Timmy
     pub time_left: f32
 }
 
-/// Per player system that gathers movement inputs
-fn player_movement_system(
-    mut movement_events: EventWriter<PlayerInput>,
-    input: Res<Input<KeyCode>>,
-) {
-    let mut direction = Vec2::ZERO;
-    if input.pressed(KeyCode::D)
-    {
-        direction.x += 1.0;
-    }
-    if input.pressed(KeyCode::A)
-    {
-        direction.x -= 1.0;
-    }
-    if input.pressed(KeyCode::W)
-    {
-        direction.y += 1.0;
-    }
-    if input.pressed(KeyCode::S)
-    {
-        direction.y -= 1.0;
-    }
-    if direction != Vec2::ZERO
-    {
-        movement_events.send(PlayerInput::Movement(direction.normalize_or_zero()));
-    }
-}
-
-// fn receive_player_movement_system(
-//     mut players: Query<(&Player, &mut MoveDirection)>,
-//     mut movement_events: EventReader<FromClient<PlayerInput>>,
-// ) {
-//     for FromClient { client_id, event } in &mut movement_events
-//     {
-        
-//     }
-// }
-
-fn move_player_system(
-    mut players: Query<(&mut Position, &MoveDirection), With<Player>>,
-    time: Res<Time>,
-) {
-    const MOVESPEED:f32 = 50.0;
-    for (mut pos, dir) in &mut players
-    {
-        pos.0 += dir.0 * time.delta_seconds() * MOVESPEED; 
-    }
-}
-
 fn player_input_system(
     mut commands: Commands,
-    mut input_writer: EventWriter<PlayerInput>,
-    input: Res<Input<KeyCode>>
+    mut input_writer_1: EventWriter<PlayerInput>,
+    mut input_writer_2: EventWriter<OtherPlayerInput>,
+    input: Res<Input<KeyCode>>,
 ) {
-    if !input.just_pressed(KeyCode::Space)
+    if input.just_pressed(KeyCode::Space)
     {
-        return;
+        let spawned_entity = commands.spawn((PlayerSpawnedComponent::default(), Replication)).id();
+        info!("Client: Spawned {spawned_entity:?} From Input");
+
+        input_writer_1.send(PlayerInput::Shoot(spawned_entity));
     }
-
-    let spawned_entity = commands.spawn((PlayerSpawnedComponent::default(), Replication)).id();
-    info!("Client: Spawned {spawned_entity:?} From Input");
-
-    input_writer.send(PlayerInput::Shoot(spawned_entity));
+    else if input.just_pressed(KeyCode::Return)
+    {
+        input_writer_2.send(OtherPlayerInput(true));
+    }
 }
 
 // Server-side system that receives the events and spawns its own version of the entity
 fn receive_player_input_system(
     mut commands: Commands,
     mut input_reader: EventReader<FromClient<PlayerInput>>,
+    mut input_reader_2: EventReader<FromClient<OtherPlayerInput>>,
     mut mapping: ResMut<ClientEntityMap>,
     tick: Res<RepliconTick>,
-    mut players: Query<(&Player, &mut MoveDirection)>,
 ) {
     for FromClient { client_id, event } in &mut input_reader
     {
@@ -208,39 +134,23 @@ fn receive_player_input_system(
             continue;
         }
 
-        match event 
-        {
-            PlayerInput::None => continue,
-            PlayerInput::Shoot(client_entity) =>
-            {
-                let server_entity = commands.spawn((PlayerSpawnedComponent::default(), Replication)).id();
+        let PlayerInput::Shoot(client_entity) = event else { continue; };
 
-                info!("Server: Spawned {server_entity:?} From Client Event (which spawned {client_entity:?})");
+        let server_entity = commands.spawn((PlayerSpawnedComponent::default(), Replication)).id();
 
-                mapping.insert(*client_id, ClientMapping { tick: *tick, server_entity: server_entity, client_entity: *client_entity });
-            },
-            PlayerInput::Movement(move_dir) => 
-            {
-                info!("Server: Received movement input from Client '{client_id}'");
-                for (player, mut direction) in &mut players
-                {
-                    if player.0 != *client_id
-                    {
-                        continue;
-                    }
+        info!("Server: Spawned {server_entity:?} From Client Event (which spawned {client_entity:?})");
 
-                    direction.0 = *move_dir;
+        mapping.insert(*client_id, ClientMapping { tick: *tick, server_entity: server_entity, client_entity: *client_entity });
+    }
 
-                    break;
-                }
-            }
-        }
+    for FromClient { client_id, event } in &mut input_reader_2
+    {
+        info!("Received event '{event:?}' from '{client_id}");
     }
 }
 
 /// Runs on both server and client, adds extra components when a PlayerSpawnedComponent entity is first created/replicated
 fn entity_tracker_system(
-    mut commands: Commands,
     mut input_count: ResMut<InputsCount>,
     new_entites: Query<Entity, (With<PlayerSpawnedComponent>, Added<Replication>)>
 ) {
@@ -248,19 +158,6 @@ fn entity_tracker_system(
     {
         info!("Client: Seen Entity {entity:?} Spawned");
         input_count.0 += 1;
-
-        commands.entity(entity).insert(RandomComponent);
-    }
-}
-
-/// Client side only function to try and trigger this bug I am experiencing
-fn client_tracker_system(
-    mut commands: Commands,
-    new_entites: Query<Entity, (With<PlayerSpawnedComponent>, Added<Replication>)>
-) {
-    for entity in &new_entites
-    {
-        commands.entity(entity).insert(RandomOtherComponent);
     }
 }
 
@@ -346,8 +243,7 @@ fn cli_system(
                 },
             ));
 
-            commands.insert_resource(LocalPlayerId(SERVER_ID));
-            commands.spawn((Player(SERVER_ID), Position(Vec2::ZERO), Replication));
+            commands.spawn((Player(SERVER_ID), Replication));
         }
         Cli::Client { port, ip } => {
             info!("Starting a client connecting to: {ip:?}:{port}");
@@ -383,8 +279,6 @@ fn cli_system(
                     ..default()
                 },
             ));
-
-            commands.insert_resource(LocalPlayerId(client_id));
         }
     }
 
@@ -404,7 +298,7 @@ fn server_connection_events_system(
             {
                 info!("Client '{client_id}' connected");
 
-                commands.spawn((Player(*client_id), Position(Vec2::ZERO), MoveDirection::default(), Replication));
+                commands.spawn((Player(*client_id), Replication));
             }
             ServerEvent::ClientDisconnected { client_id, reason } =>
             {
@@ -416,27 +310,19 @@ fn server_connection_events_system(
 
 fn attach_extras_to_players(
     mut commands: Commands,
-    players: Query<(Entity, &Player, &Position), Added<Replication>>,
-    local_player: Res<LocalPlayerId>,
+    players: Query<Entity, (With<Player>, Added<Replication>)>,
 ) {
-    for (player_entity, player, pos) in &players
+    for player_entity in &players
     {
-        let mut coms = commands.entity(player_entity);
-        coms.insert(SpriteBundle 
+        commands.entity(player_entity).insert(SpriteBundle 
         {
             sprite: Sprite 
             {  
                 custom_size: Some(Vec2::new(15.0, 15.0)),
                 ..default()
             },
-            transform: Transform::from_translation(pos.0.extend(0.0)),
             ..default()
         });
-
-        if player.0 == local_player.0
-        {
-            coms.insert(MoveDirection::default());
-        }
     }
 }
 
