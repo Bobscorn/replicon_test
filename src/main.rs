@@ -26,6 +26,7 @@ fn main() {
             player_input_system,
             update_input_count_text,
             entity_tracker_system,
+            attach_extras_to_players,
         ))
         .add_systems(Update,
             (
@@ -257,7 +258,7 @@ fn cli_system(
                 },
             ));
 
-            commands.spawn((Player(SERVER_ID), Position(Vec2::ZERO), SpriteBundle { sprite: Sprite { custom_size: Some(Vec2::new(15.0, 15.0)), ..default() }, ..default() }));
+            commands.spawn((Player(SERVER_ID), Position(Vec2::ZERO), Replication));
         }
         Cli::Client { port, ip } => {
             info!("Starting a client connecting to: {ip:?}:{port}");
@@ -312,13 +313,32 @@ fn server_connection_events_system(
             {
                 info!("Client '{client_id}' connected");
 
-                commands.spawn((Player(*client_id), Position(Vec2::ZERO), SpriteBundle { sprite: Sprite { custom_size: Some(Vec2::new(15.0, 15.0)), ..default() }, ..default() }));
+                commands.spawn((Player(*client_id), Position(Vec2::ZERO), Replication));
             }
             ServerEvent::ClientDisconnected { client_id, reason } =>
             {
                 info!("Client '{client_id}' disconnected: {reason}");
             }
         }
+    }
+}
+
+fn attach_extras_to_players(
+    mut commands: Commands,
+    players: Query<(Entity, &Position), (With<Player>, Added<Replication>)>,
+) {
+    for (player_entity, pos) in &players
+    {
+        commands.entity(player_entity).insert(SpriteBundle 
+        {
+            sprite: Sprite 
+            {  
+                custom_size: Some(Vec2::new(15.0, 15.0)),
+                ..default()
+            },
+            transform: Transform::from_translation(pos.0.extend(0.0)),
+            ..default()
+        });
     }
 }
 
