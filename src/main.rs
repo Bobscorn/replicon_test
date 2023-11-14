@@ -1,7 +1,7 @@
 use std::{error::Error, net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket}, time::{SystemTime, Duration}};
 
 use bevy::prelude::*;
-use bevy_replicon::{prelude::*, renet::{ConnectionConfig, transport::{ServerConfig, ServerAuthentication, NetcodeServerTransport, ClientAuthentication, NetcodeClientTransport}, SendType, ServerEvent}, client};
+use bevy_replicon::{prelude::*, renet::{ConnectionConfig, transport::{ServerConfig, ServerAuthentication, NetcodeServerTransport, ClientAuthentication, NetcodeClientTransport}, SendType, ServerEvent, ClientId}, client};
 use clap::Parser;
 use serde::{Serialize, Deserialize};
 
@@ -19,7 +19,7 @@ fn main() {
         .add_systems(
             Startup,
         (
-            cli_system.pipe(system_adapter::unwrap),
+            cli_system.map(Result::unwrap),
             init_system,
         ))
         .add_systems(Update, 
@@ -48,7 +48,7 @@ fn main() {
         .run();
 }
 
-const SERVER_ID: u64 = 0;
+const SERVER_ID: ClientId = ClientId::from_raw(0);
 const PORT: u16 = 5003;
 const PROTOCOL_ID: u64 = 0;
 
@@ -201,7 +201,7 @@ fn receive_player_input_system(
     tick: Res<RepliconTick>,
     mut players: Query<(&Player, &mut MoveDirection)>,
 ) {
-    for FromClient { client_id, event } in &mut input_reader
+    for FromClient { client_id, event } in input_reader.read()
     {
         if *client_id == SERVER_ID
         {
@@ -224,7 +224,7 @@ fn receive_player_input_system(
                 info!("Server: Received movement input from Client '{client_id}'");
                 for (player, mut direction) in &mut players
                 {
-                    if player.0 != *client_id
+                    if ClientId::from_raw(player.0) != *client_id
                     {
                         continue;
                     }
@@ -314,8 +314,8 @@ fn cli_system(
     match *cli {
         Cli::Server { port } => {
             info!("Starting a server on port {port}");
-            let server_channels_config = network_channels.server_channels();
-            let client_channels_config = network_channels.client_channels();
+            let server_channels_config = network_channels.get_server_configs();
+            let client_channels_config = network_channels.get_client_configs();
 
             let server = RenetServer::new(ConnectionConfig {
                 server_channels_config,
@@ -327,12 +327,13 @@ fn cli_system(
             let public_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
             let socket = UdpSocket::bind(public_addr)?;
             let server_config = ServerConfig {
+                current_time,
                 max_clients: 10,
                 protocol_id: PROTOCOL_ID,
-                public_addr,
-                authentication: ServerAuthentication::Unsecure,
+                public_addresses: vec![public_addr],
+                authentication: ServerAuthentication::Unsecure
             };
-            let transport = NetcodeServerTransport::new(current_time, server_config, socket)?;
+            let transport = NetcodeServerTransport::new(server_config, socket)?;
 
             commands.insert_resource(server);
             commands.insert_resource(transport);
@@ -346,13 +347,13 @@ fn cli_system(
                 },
             ));
 
-            commands.insert_resource(LocalPlayerId(SERVER_ID));
-            commands.spawn((Player(SERVER_ID), Position(Vec2::ZERO), Replication));
+            commands.insert_resource(LocalPlayerId(SERVER_ID.raw()));
+            commands.spawn((Player(SERVER_ID.raw()), Position(Vec2::ZERO), Replication));
         }
         Cli::Client { port, ip } => {
             info!("Starting a client connecting to: {ip:?}:{port}");
-            let server_channels_config = network_channels.server_channels();
-            let client_channels_config = network_channels.client_channels();
+            let server_channels_config = network_channels.get_server_configs();
+            let client_channels_config = network_channels.get_client_configs();
 
             let client = RenetClient::new(ConnectionConfig {
                 server_channels_config,
@@ -396,7 +397,7 @@ fn server_connection_events_system(
     mut commands: Commands,
     mut server_events: EventReader<ServerEvent>,
 ) {
-    for event in &mut server_events
+    for event in server_events.read()
     {
         match event
         {
@@ -404,7 +405,7 @@ fn server_connection_events_system(
             {
                 info!("Client '{client_id}' connected");
 
-                commands.spawn((Player(*client_id), Position(Vec2::ZERO), MoveDirection::default(), Replication));
+                commands.spawn((Player(client_id.raw()), Position(Vec2::ZERO), MoveDirection::default(), Replication));
             }
             ServerEvent::ClientDisconnected { client_id, reason } =>
             {
